@@ -235,13 +235,18 @@ sub on_websocket_message {
       #      $message =~ s/`/\\`/gm;
       
       my $ipc_process = $self->{$socket_id}->{console_mode};
+      ## Tried to use Expect, but failed to capture its STDOUT
 #      my $bash = $self->{$socket_id}->{console_mode};
       $Log->notice("Received '$message'");
       
       if ( $message =~ /^\d+$/ ) {
-        my $key_code = chr($message);
+        # Here I tried to pass a string that Bash could interpret as char,
+        # but later understood it will be only interpret on execution
 #        $message = "\$'" . '\\' . "0$message'";
-        $message = "$key_code";
+        
+        # Transform key code to char
+        my $char = chr($message);
+        $message = $char;
       }
       
       $Log->notice("Will send: /  $message  /");
