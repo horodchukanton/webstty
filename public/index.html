@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebsTTY</title>
+
+  <link rel='stylesheet' type='text/css' href='/css/bootstrap.min.css'>
+  <link rel='stylesheet' type='text/css' href='/css/font-awesome.min.css'>
+
+  <script src='/js/jquery.min.js'></script>
+  <script src='/js/bootstrap.min.js'></script>
+  <script src='/js/events.js'></script>
+  <script src='/js/keys.js'></script>
+
+  <script>
+    document['WEBSOCKET_URL'] = '192.168.2.2:19443';
+    Events.setDebug(1);
+  </script>
+  <script src='/js/websocket_client.js'></script>
+  <script src='/js/webstty.js'></script>
+</head>
+<body>
+
+<h1>Hello</h1>
+
+<pre id="console"></pre>
+
+
+</body>
+</html>
