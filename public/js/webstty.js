@@ -12,7 +12,8 @@ Events.on('WebSocket.connected', function (ws) {
         //  console.log('In raw mode : ' + result);
         //})
       });
-      ws.send('pwd');
+      $console_div.append("# pwd\n");
+      ws.send('pwd\n');
     }
   });
   

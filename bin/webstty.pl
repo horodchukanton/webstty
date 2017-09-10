@@ -1,10 +1,12 @@
 #!/usr/bin/perl
 use strict;
 use warnings FATAL => 'all';
-
 use utf8;
 
 our (%conf, $base_dir, $debug, $ARGS, $db);
+
+# Setting autoflush
+$| = 1;
 
 $debug ||= 3;
 

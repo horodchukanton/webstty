@@ -160,9 +160,10 @@ sub new_admin_websocket_client {
   # On close
   $handle->on_eof(
     sub {
-      # Try to do it "good way"
       $self->{$socket_id}->{console_mode} = 0;
       $Log->debug("$socket_id EOF");
+      
+      # Try to do it "good way"
       unless ( $adminSessions->remove_session_by_socket_id($socket_id) ) {
         # And otherwise kick it's face
         $handle->destroy;
@@ -175,11 +176,10 @@ sub new_admin_websocket_client {
     sub {
       my AnyEvent::Handle $read_handle = shift;
       
-      return unless ( defined $read_handle );
-      $self->{$socket_id}->{console_mode} = 0;
-      
+      undef $self->{$socket_id}->{console_mode};
       $Log->debug("Error happened with admin $socket_id ");
       
+      return unless ( defined $read_handle );
       $read_handle->push_shutdown;
       $read_handle->destroy;
       
@@ -221,10 +221,7 @@ sub on_websocket_message {
       if ( $message eq qq/{"TYPE":"CONSOLE_CLOSE"}/ ) {
         my $response_text = '{"TYPE":"RESPONCE","RESULT":"OK"}';
         
-        my $ipc_process = $self->{$socket_id}->{console_mode};
-        $ipc_process->close();
-        
-        undef $self->{$socket_id}->{console_mode};
+        $self->exit_console_mode($socket_id);
         $Log->notice("Console mode off");
         
         $this_client_handle->push_write($frame->new($response_text)->to_bytes);
@@ -232,30 +229,7 @@ sub on_websocket_message {
         return;
       }
       
-      #      $message =~ s/`/\\`/gm;
-      
-      my $ipc_process = $self->{$socket_id}->{console_mode};
-      ## Tried to use Expect, but failed to capture its STDOUT
-#      my $bash = $self->{$socket_id}->{console_mode};
-      $Log->notice("Received '$message'");
-      
-      if ( $message =~ /^\d+$/ ) {
-        # Here I tried to pass a string that Bash could interpret as char,
-        # but later understood it will be only interpret on execution
-#        $message = "\$'" . '\\' . "0$message'";
-        
-        # Transform key code to char
-        my $char = chr($message);
-        $message = $char;
-      }
-      
-      $Log->notice("Will send: /  $message  /");
-#      $bash->print($message);
-      $ipc_process->print($message);
-#      print $bash->before() || '';
-      return;
-      
-      return;
+      return $self->proxy_to_console($socket_id, $message);
     }
     
     my $decoded_message = json_decode_safe($message);
@@ -279,53 +253,18 @@ sub on_websocket_message {
         return;
       }
       elsif ( $decoded_message->{TYPE} eq 'CONSOLE_REQUEST' ) {
-        
-        my $err = '';
-        my $ipc = AnyEvent::Open3::Simple->new(
-          on_start  => sub {
-            my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
-            my $program = shift;    # string
-            my @args = @_;          # list of arguments
-            say 'child PID: ', $proc->pid;
-            $self->{$socket_id}->{console_mode} = $proc;
-          },
-          on_stdout => sub {
-            my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
-            my $line = shift;       # string
-            $Log->notice("stdout : '$line'");
-            $this_client_handle->push_write($frame->new($line)->to_bytes);
-
-          },
-          on_stderr => sub {
-            my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
-            my $line = shift;       # string
-            $Log->notice("stderr : '$line'");
-            $this_client_handle->push_write($frame->new($line)->to_bytes);
-          },
-          on_exit   => sub {
-            my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
-            my $exit_value = shift; # integer
-            my $signal = shift;     # integer
-            $Log->error ("Console exit with : " . $signal);
-          },
-          on_error  => sub {
-            my $error = shift;      # the exception thrown by IPC::Open3::open3
-            my $program = shift;    # string
-            $Log->error ("$program exits with error");
-          },
-        ) or $err = "Can't open IPC $!";
- 
-        $ipc->run('/bin/bash') or $err = "Can't start /bin/bash : $!";
-        
-        my $response_text = $err || '{"TYPE":"RESPONCE","RESULT":"OK"}';
-        if ( $err ) {
-          $response_text = qq'{"TYPE":"ERROR","ERROR":"$err"}'
-        }
-        else {
+  
+        my $responce_text = '';
+        if ($self->start_console_mode($socket_id)){
+          $responce_text = '{"TYPE":"RESPONCE","RESULT":"OK"}';
           print "Console mode on\n";
         }
-        $this_client_handle->push_write($frame->new($response_text)->to_bytes);
-        return;
+        else {
+          $responce_text =  '{"TYPE":"ERROR","ERROR":"UNKNOWN ERROR"}';
+        }
+        
+        $this_client_handle->push_write($frame->new($responce_text)->to_bytes);
+        
       }
       else {
         my %response;
@@ -399,6 +338,134 @@ sub _do_handshake {
   }
   
   return 0;
+}
+
+
+#**********************************************************
+=head2 start_console_mode($socket_id) - starts console process
+
+  Arguments:
+    $socket_id -
+    
+  Returns:
+    process STDOUT
+    
+=cut
+#**********************************************************
+sub start_console_mode {
+  my ($self, $socket_id) = @_;
+  
+  my $this_client_handle = $adminSessions->get_handle_by_socket_id($socket_id);
+  return if (!$socket_id || !$this_client_handle);
+  
+  # Create pipe
+#  `[ -f ./console_1 ] && /usr/bin/mkfifo ./console_1`;
+#  open(my $fifo, '>', "./console_1") or do {
+#    $Log->alert("Can't open ./console_1");
+#    return undef;
+#  };
+  
+  my $err = '';
+  my $ipc = AnyEvent::Open3::Simple->new(
+    on_start  => sub {
+      my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
+      my $program = shift;    # string
+      my @args = @_;          # list of arguments
+      say 'child PID: ', $proc->pid;
+      
+      $self->{$socket_id}->{console_mode} = $proc;
+      
+    },
+    on_stdout => sub {
+      my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
+      my $line = shift;       # string
+      $Log->notice("stdout : '$line'");
+      my $frame = Protocol::WebSocket::Frame->new;
+      $this_client_handle->push_write($frame->new($line)->to_bytes);
+      
+    },
+    on_stderr => sub {
+      my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
+      my $line = shift;       # string
+      $Log->notice("stderr : '$line'");
+      my $frame = Protocol::WebSocket::Frame->new;
+      $this_client_handle->push_write($frame->new($line)->to_bytes);
+      $self->exit_console_mode($socket_id);
+    },
+    on_exit   => sub {
+      my $proc = shift;       # isa AnyEvent::Open3::Simple::Process
+      my $exit_value = shift; # integer
+      my $signal = shift;     # integer
+      $Log->error ("Console exit with : " . $signal);
+    },
+    on_error  => sub {
+      my $error = shift;      # the exception thrown by IPC::Open3::open3
+      my $program = shift;    # string
+      $Log->error ("$program exits with error $err");
+      $self->exit_console_mode($socket_id);
+    },
+  ) or $err = "Can't open IPC $!";
+  
+  $ipc->run('/bin/bash') or $err = "Can't start /bin/bash : $!";
+  
+  return $err ? 0 : 1;
+}
+
+
+#**********************************************************
+=head2 proxy_to_console($socket_id, $message) - proxy_to_console_handler
+
+  Arguments:
+    $message -
+    
+  Returns:
+    undef
+    
+=cut
+#**********************************************************
+sub proxy_to_console {
+  my ($self, $socket_id, $message) = @_;
+  return unless $socket_id && $message;
+  
+  my $ipc_process = $self->{$socket_id}->{console_mode};
+  
+  $Log->notice("Received '$message'");
+  
+  if ( $message =~ /^\d+$/ ) {
+    # Transform key code to char
+    my $char = chr($message);
+    $message = $char;
+  }
+  
+  $Log->notice("Will send: /  $message  /");
+  my $child_stdin = $ipc_process->{stdin};
+  
+  $child_stdin->print($message);
+  $child_stdin->flush();
+  
+  return;
+}
+
+#**********************************************************
+=head2 exit_console_mode($socket_id) - removes temprorary files and goes back to normal mode
+
+  Arguments:
+    $socket_id -
+    
+  Returns:
+  
+  
+=cut
+#**********************************************************
+sub exit_console_mode {
+  my ($self,  $socket_id) = @_;
+  
+  return if (!$socket_id || !$self->{$socket_id}{console_mode});
+  
+  $self->{$socket_id}{console_mode}->close();
+  undef $self->{$socket_id}{console_mode};
+  
+  return 1;
 }
 
 DESTROY {
